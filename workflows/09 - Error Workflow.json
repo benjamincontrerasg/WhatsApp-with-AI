@@ -1,0 +1,271 @@
+{
+  "name": "09 - Error Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "7ecd87bf-1373-4764-9286-0b66d72d6b71",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        272,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst redact = (s) => String(s ?? '')\n  .replace(/Bearer\\s+[A-Za-z0-9._\\-~+\\/=]+/gi, 'Bearer [REDACTED]')\n  .replace(/EAA[A-Za-z0-9]{20,}/g, '[REDACTED_META_TOKEN]')\n  .replace(/(APP_USR|TEST)-[A-Za-z0-9\\-_]{10,}/g, '[REDACTED_MP_TOKEN]')\n  .replace(/sk-[A-Za-z0-9_\\-]{16,}/g, '[REDACTED_OPENAI_KEY]')\n  .replace(/postgres(ql)?:\\/\\/[^\\s'\"]+/gi, 'postgres://[REDACTED]')\n  .replace(/(password|passwd|token|secret|api[_-]?key|authorization)([\"'\\s:=]+)([^\\s,\"'}]+)/gi, '$1$2[REDACTED]');\n\nconst e = $json || {};\nconst ex = e.execution || {};\nconst err = ex.error || e.trigger?.error || {};\nconst rep = {\n  workflow_id: e.workflow?.id || null,\n  workflow_nombre: e.workflow?.name || 'desconocido',\n  nodo: err.node?.name || ex.lastNodeExecuted || null,\n  mensaje: redact(err.message || 'sin mensaje').slice(0, 600),\n  execution_id: ex.id ? String(ex.id) : null,\n  execution_url: ex.url || null,\n  ts: new Date().toISOString(),\n  modo: ex.mode || (e.trigger ? 'trigger' : null),\n  stack: redact(String(err.stack || '').split('\\n').slice(0, 4).join(' | ')).slice(0, 500),\n};\nconst admin = String($env.ADMIN_WHATSAPP_NUMBER || '').replace(/\\D/g, '');\nconst texto = `🚨 Error en n8n\\nWorkflow: ${rep.workflow_nombre}\\nNodo: ${rep.nodo || '-'}\\nMensaje: ${rep.mensaje.slice(0, 350)}\\nEjecución: ${rep.execution_id || '-'}\\nHora: ${rep.ts}`;\nreturn { json: { ...rep, admin, texto: texto.slice(0, 900) } };\n"
+      },
+      "id": "554a8f84-c860-4db2-822b-9f0daba4c9eb",
+      "name": "Armar Reporte",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO error_log (workflow_id, workflow_nombre, nodo, mensaje, execution_id, execution_url, detalle) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [$json.workflow_id, $json.workflow_nombre, $json.nodo, $json.mensaje, $json.execution_id, $json.execution_url, JSON.stringify({modo: $json.modo, stack: $json.stack, ts: $json.ts})] }}"
+        }
+      },
+      "id": "81fb14b8-024d-4b6c-9790-146433b1f9fe",
+      "name": "Guardar en error_log",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1024,
+        272
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "MrnDgKcLjmHPxeD6",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: $('Armar Reporte').first().json };"
+      },
+      "id": "b84fa88c-86e2-46ac-ba8f-e34e354be642",
+      "name": "Recuperar Reporte",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9bcb8946-e521-e4ed-b03b-4c029008ad61",
+              "leftValue": "={{ /^\\d{8,15}$/.test($json.admin || '') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "39367317-0726-476f-a474-32f12a033bc8",
+      "name": "¿Hay número admin?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1552,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { body: { messaging_product: 'whatsapp', recipient_type: 'individual', to: $json.admin, type: 'text', text: { body: String($json.texto).slice(0, 900), preview_url: false } } } };"
+      },
+      "id": "0abce1cb-d2d9-4edf-8824-0dea9e7e62ba",
+      "name": "Armar Alerta WhatsApp",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $env.WHATSAPP_GRAPH_VERSION || 'v23.0' }}/{{ $env.WHATSAPP_PHONE_NUMBER_ID || '1372871745910576' }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "ebdc40d8-82d8-43d2-b4c8-a434db20e233",
+      "name": "Enviar Alerta a WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2064,
+        272
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "aGFFyqh8OmWSNDoY",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "fromEmail": "REEMPLAZAR_remitente@dominio.com",
+        "toEmail": "REEMPLAZAR_admin@dominio.com",
+        "subject": "=[n8n] Error en {{ $json.workflow_nombre }}",
+        "emailFormat": "text",
+        "text": "={{ $json.texto }}",
+        "options": {}
+      },
+      "id": "7da3c362-a1e4-45f8-9760-ed89dd855ffb",
+      "name": "Email (opcional, desactivado)",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2320,
+        272
+      ],
+      "webhookId": "647c9b00-9290-4ffe-b7f0-ebb2d0614b14",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "**Error Workflow global**\n\nSe asigna en Settings > Error Workflow de cada workflow (ya viene configurado en estos JSON, apuntando a este workflow).\n\n1. Arma reporte saneado (sin tokens)\n2. Guarda en `error_log`\n3. Avisa por WhatsApp al admin (ADMIN_WHATSAPP_NUMBER).\n4. Email opcional (nodo desactivado).\n\nNota: WhatsApp solo permite texto libre si el admin escribió al bot en las últimas 24 h.",
+        "height": 300,
+        "width": 460
+      },
+      "id": "a411d09c-7b8a-4035-896e-093a6c69668d",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        112,
+        -192
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Armar Reporte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Reporte": {
+      "main": [
+        [
+          {
+            "node": "Guardar en error_log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar en error_log": {
+      "main": [
+        [
+          {
+            "node": "Recuperar Reporte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recuperar Reporte": {
+      "main": [
+        [
+          {
+            "node": "¿Hay número admin?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email (opcional, desactivado)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Hay número admin?": {
+      "main": [
+        [
+          {
+            "node": "Armar Alerta WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Alerta WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Enviar Alerta a WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "be4a7575-9639-48cc-9ed5-19753fdd3cd7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2999b9d59aaed27f3e392ce31b61b88b0c7e6714815820c57e764db37b52f47b"
+  },
+  "nodeGroups": [],
+  "id": "aHI8dCEOVUV5qT91",
+  "tags": []
+}

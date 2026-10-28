@@ -1,0 +1,399 @@
+{
+  "name": "06 - Mercado Pago: Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mercadopago",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "098ef487-17ef-4ca1-b15d-a157c58090e2",
+      "name": "Webhook Mercado Pago",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        272,
+        272
+      ],
+      "webhookId": "bcd4a97d-9962-0d16-681c-fa925cf1eac8"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst crypto = require('crypto');\nconst j = $input.first().json;\nconst q = j.query || {}, body = j.body || {}, hd = j.headers || {};\nconst tipo = String(body.type || q.type || q.topic || '');\nconst rawId = body.data?.id ?? q['data.id'] ?? null;\nconst dataId = rawId == null ? '' : String(rawId);\nconst res = (http_status, procesar, motivo) => [{ json: { http_status, procesar, motivo, payment_id: procesar ? dataId : null } }];\nif (tipo !== 'payment') return res(200, false, 'tipo_ignorado:' + tipo);\nif (!/^\\d{1,20}$/.test(dataId)) return res(200, false, 'payment_id_invalido');\nconst secret = String($env.MP_WEBHOOK_SECRET || '');\nif (!secret) return res(401, false, 'MP_WEBHOOK_SECRET_no_configurado');\n{\n  const xsig = String(hd['x-signature'] || '');\n  const parts = Object.fromEntries(xsig.split(',').map(s => s.trim().split('=').map(x => x.trim())).filter(a => a.length === 2));\n  const ts = parts.ts, v1 = parts.v1;\n  if (!ts || !v1) return res(401, false, 'firma_ausente');\n  const reqId = String(hd['x-request-id'] || '');\n  const manifest = `id:${dataId.toLowerCase()};request-id:${reqId};ts:${ts};`;\n  const exp = crypto.createHmac('sha256', secret).update(manifest).digest('hex');\n  const a = Buffer.from(v1), b = Buffer.from(exp);\n  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res(401, false, 'firma_invalida');\n}\nreturn res(200, true, 'ok');\n"
+      },
+      "id": "61e087ed-e53d-4b3b-87bc-8ea85f1a233c",
+      "name": "Validar y Extraer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ed745668-f7d6-6942-b226-ef3e826ffa9f",
+              "leftValue": "={{ $json.procesar }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a3a80626-ebf0-422b-a8cc-34e9d443f29b",
+      "name": "¿Procesar pago?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1024,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.motivo }}",
+        "options": {
+          "responseCode": "={{ $json.http_status }}"
+        }
+      },
+      "id": "41de816b-d653-4005-8f3b-89a8ed8b73ec",
+      "name": "Responder Ignorado",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1264,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.mercadopago.com/v1/payments/{{ $json.payment_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "3d078b27-5f42-439b-8ec4-efa4e3fb6d9b",
+      "name": "Consultar Pago en MP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1312,
+        160
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "jxGv11we5t8T7IJp",
+          "name": "Meta WhatsApp Access Token"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst res = $input.first().json;\nconst wanted = String($('Validar y Extraer').first().json.payment_id || '');\nif (res.statusCode === 404) return [{ json: { ignorar: true, motivo: 'PAGO_NO_ENCONTRADO_EN_MP', payment_id: wanted } }];\nif (res.statusCode !== 200) throw new Error(`Mercado Pago respondió HTTP ${res.statusCode} al consultar el pago ${wanted}`);\nconst p = res.body || {};\nif (String(p.id) !== wanted) throw new Error('El pago devuelto por MP no coincide con el solicitado');\nconst raw = { id: p.id, status: p.status, status_detail: p.status_detail, date_created: p.date_created, date_approved: p.date_approved,\n  payment_method_id: p.payment_method_id, payment_type_id: p.payment_type_id, transaction_amount: p.transaction_amount,\n  transaction_amount_refunded: p.transaction_amount_refunded, currency_id: p.currency_id,\n  external_reference: p.external_reference, live_mode: p.live_mode, operation_type: p.operation_type };\nreturn [{ json: { ignorar: false, payment_id: String(p.id), status: p.status, status_detail: p.status_detail || '',\n  external_reference: p.external_reference || '', monto: p.transaction_amount, moneda: p.currency_id || '',\n  metodo: [p.payment_type_id, p.payment_method_id].filter(Boolean).join('/'), raw } }];\n"
+      },
+      "id": "79e0d833-a1f0-429c-a226-cb3957fbc819",
+      "name": "Extraer Datos del Pago",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        160
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f8f3fb46-539a-ae61-809a-b080f416b2a3",
+              "leftValue": "={{ $json.ignorar }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c2c72c51-2a5e-469c-9da2-a202cd8cdac3",
+      "name": "¿Ignorar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1824,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "msZRRj8XpQRefcu1",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "f735c230-2331-4fb5-b8b4-51e6fb13c278",
+      "name": "Procesar Pago",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2080,
+        272
+      ],
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "OK",
+        "options": {
+          "responseCode": "200"
+        }
+      },
+      "id": "f221a37c-73e5-4804-8cde-472d618360c4",
+      "name": "Responder 200 OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2368,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "error",
+        "options": {
+          "responseCode": "500"
+        }
+      },
+      "id": "975db36c-80e2-4784-be09-744a7aa6ba9a",
+      "name": "Responder 500 (MP reintentará)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2368,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "error",
+        "options": {
+          "responseCode": "500"
+        }
+      },
+      "id": "0db682c7-02e6-4739-94af-28d8bf826a82",
+      "name": "Responder 500 (falló la consulta)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1824,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "Falló la consulta del pago a Mercado Pago (se respondió 500 para que MP reintente)"
+      },
+      "id": "3cec1554-0202-4d83-81e4-4709ae2f34d8",
+      "name": "Alertar al Error Workflow",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        2080,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "content": "**06 · Webhook de Mercado Pago**\n\nURL: /webhook/mercadopago\n1. Valida x-signature (MP_WEBHOOK_SECRET es obligatorio) y type=payment\n2. NO confía en el cuerpo: consulta GET /v1/payments/{id} a Mercado Pago\n3. Llama a 07 Procesar pago\n4. Responde 200 si todo salió bien; 500 si falló (MP reintenta)\n\nRequiere NODE_FUNCTION_ALLOW_BUILTIN=crypto.",
+        "height": 300,
+        "width": 460
+      },
+      "id": "a2d095a1-0c7b-43ed-895f-7b13d5dc390d",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        192,
+        -176
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook Mercado Pago": {
+      "main": [
+        [
+          {
+            "node": "Validar y Extraer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar y Extraer": {
+      "main": [
+        [
+          {
+            "node": "¿Procesar pago?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Procesar pago?": {
+      "main": [
+        [
+          {
+            "node": "Consultar Pago en MP",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder Ignorado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Consultar Pago en MP": {
+      "main": [
+        [
+          {
+            "node": "Extraer Datos del Pago",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer Datos del Pago": {
+      "main": [
+        [
+          {
+            "node": "¿Ignorar?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 500 (falló la consulta)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Responder 500 (falló la consulta)": {
+      "main": [
+        [
+          {
+            "node": "Alertar al Error Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Ignorar?": {
+      "main": [
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Procesar Pago",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Procesar Pago": {
+      "main": [
+        [
+          {
+            "node": "Responder 200 OK",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 500 (MP reintentará)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "errorWorkflow": "aHI8dCEOVUV5qT91"
+  },
+  "versionId": "1ad51c5f-db54-42c1-956b-de71a34725d3",
+  "meta": {
+    "instanceId": "2999b9d59aaed27f3e392ce31b61b88b0c7e6714815820c57e764db37b52f47b"
+  },
+  "nodeGroups": [],
+  "id": "Rg3iH3fWLPOW0rFy",
+  "tags": []
+}

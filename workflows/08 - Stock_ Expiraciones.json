@@ -1,0 +1,197 @@
+{
+  "name": "08 - Stock: Expiraciones",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "67b4e170-4f8d-4b6f-956c-c938ae4bb44a",
+      "name": "Cada minuto",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        272,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM fn_expirar_reservas(100)",
+        "options": {}
+      },
+      "id": "b4155b09-10f5-40b9-9eb8-3f2637c01453",
+      "name": "fn_expirar_reservas",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        768,
+        272
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7n6B4nm3zv5jlds5",
+          "name": "Neon PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst out = [];\nfor (const it of $input.all()) {\n  const r = it.json;\n  if (r.estado_anterior === 'BORRADOR') continue;     // nunca llegó a reservar/pagar: sin aviso\n  out.push({ json: { telefono: r.telefono, tipo: 'texto',\n    texto: `Tu pedido #${r.numero} venció porque no recibimos el pago a tiempo, así que liberamos las unidades. Si aún lo quieres, escríbeme y lo preparamos de nuevo 🙂` } });\n}\nreturn out;\n"
+      },
+      "id": "29be5f87-5c6a-4d78-b94b-af834dc30a49",
+      "name": "Armar Avisos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuQzrUqxzOwLIFGl",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "2bf2c9f6-e576-47ef-9e2f-c703fbcb8d06",
+      "name": "Enviar Aviso (Sender)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1280,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 3
+            }
+          ]
+        }
+      },
+      "id": "83a2e5ab-42cc-4167-9297-6225215ad2ed",
+      "name": "Limpieza diaria",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        272,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT fn_limpiar_webhook_eventos(30) AS borrados",
+        "options": {}
+      },
+      "id": "8c853e13-9432-44e8-87e2-7d0f707a1317",
+      "name": "fn_limpiar_webhook_eventos",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        528,
+        480
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7n6B4nm3zv5jlds5",
+          "name": "Neon PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "**Expiración de reservas/pedidos (cada minuto)**\n\n`fn_expirar_reservas()` (FOR UPDATE SKIP LOCKED) cancela pedidos BORRADOR / PENDIENTE_PAGO / PAGO_RECHAZADO vencidos y libera sus reservas una sola vez. Avisa al cliente solo si había confirmado.\n\nUn segundo disparador diario limpia webhook_eventos antiguos.\n\nSi un pago aprobado llega justo después, fn_procesar_pago lo recupera (pago tardío) o lo marca para reembolso.",
+        "height": 300,
+        "width": 460
+      },
+      "id": "db0f0f61-69f0-469d-a63d-e489af3b486a",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -80
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Cada minuto": {
+      "main": [
+        [
+          {
+            "node": "fn_expirar_reservas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fn_expirar_reservas": {
+      "main": [
+        [
+          {
+            "node": "Armar Avisos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Avisos": {
+      "main": [
+        [
+          {
+            "node": "Enviar Aviso (Sender)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limpieza diaria": {
+      "main": [
+        [
+          {
+            "node": "fn_limpiar_webhook_eventos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "errorWorkflow": "aHI8dCEOVUV5qT91"
+  },
+  "versionId": "15e180a6-96f6-41e5-be05-13677f6fbcf8",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2999b9d59aaed27f3e392ce31b61b88b0c7e6714815820c57e764db37b52f47b"
+  },
+  "nodeGroups": [],
+  "id": "3dS57hhRO4BSDiZc",
+  "tags": []
+}

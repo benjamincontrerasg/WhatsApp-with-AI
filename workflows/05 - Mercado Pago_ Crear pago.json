@@ -1,0 +1,500 @@
+{
+  "name": "05 - Mercado Pago: Crear pago",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "342c3a2e-2dd1-4839-86b4-9b20e2da9d27",
+      "name": "Entrada",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        272,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "3696dbc9-4397-797e-f921-1a9b480a5107",
+              "leftValue": "={{ !!$json.mp_init_point }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f8faf855-43e3-4ac8-b40e-a63ebeee4d9a",
+      "name": "¿Ya tiene link?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        768,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { telefono: $json.telefono, tipo: 'link_pago', pedido: $json, url: $json.mp_init_point } };"
+      },
+      "id": "5edb4e82-7416-44d8-abe1-28201f2357c5",
+      "name": "Armar Link Existente",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst p = $json;\nconst base = String($env.WEBHOOK_URL || '').replace(/\\/+$/, '');\nif (!/^https:\\/\\//.test(base)) throw new Error('WEBHOOK_URL debe ser una URL https pública (la de Railway)');\nif (!Array.isArray(p.items) || !p.items.length) throw new Error('Pedido sin ítems');\nconst suma = p.items.reduce((a, i) => a + Number(i.precio_unitario) * Number(i.cantidad), 0);\nif (Math.abs(suma - Number(p.total)) > 0.01) throw new Error('La suma de ítems no coincide con el total del pedido');\nconst body = {\n  items: p.items.map(i => ({ id: i.sku, title: [i.producto, i.talla, i.color].filter(Boolean).join(' - ').slice(0, 250),\n                             quantity: Number(i.cantidad), unit_price: Number(i.precio_unitario), currency_id: String(p.moneda).trim() })),\n  external_reference: p.pedido_id,\n  notification_url: `${base}/webhook/mercadopago`,\n  expires: true,\n  expiration_date_from: new Date().toISOString(),\n  expiration_date_to: new Date(p.expira_en).toISOString(),\n  metadata: { pedido_id: p.pedido_id, numero: p.numero }\n};\nreturn { json: { pedido_id: p.pedido_id, pedido: p, body } };\n"
+      },
+      "id": "6915ab7d-7c0b-4337-a5e0-837cba51c775",
+      "name": "Armar Preferencia",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mercadopago.com/checkout/preferences",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Idempotency-Key",
+              "value": "={{ $json.pedido_id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "e37b2fd0-4aca-4718-a454-509bc0ebe887",
+      "name": "Crear Preferencia MP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1552,
+        272
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Mercado Pago Access Token"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst r = $json;\nconst ctx = $('Armar Preferencia').first().json;\nconst url = String($env.MP_USE_SANDBOX === 'true' ? (r.sandbox_init_point || r.init_point) : r.init_point || '');\nif (!r.id || !/^https:\\/\\//.test(url)) throw new Error('Mercado Pago no devolvió una preferencia válida');\nreturn { json: { pedido_id: ctx.pedido_id, pref_id: String(r.id), init_point: url } };\n"
+      },
+      "id": "3d74576a-ba3b-4473-8ebd-fadb47a8b22f",
+      "name": "Extraer Preferencia",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT fn_registrar_preferencia($1::text, $2::text, $3::text) AS r",
+        "options": {
+          "queryReplacement": "={{ [ $json.pedido_id, $json.pref_id, $json.init_point ] }}"
+        }
+      },
+      "id": "35bb1963-8036-4003-9ee2-f13ddbf6cc92",
+      "name": "fn_registrar_preferencia",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2064,
+        272
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7n6B4nm3zv5jlds5",
+          "name": "Neon PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cc73ba8f-203b-6db0-c06c-272f454fe978",
+              "leftValue": "={{ $json.r.ok === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b4e3e631-0f18-4258-a7e3-543d892fbfcb",
+      "name": "¿Registrada?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2320,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { telefono: $json.r.telefono, tipo: 'link_pago', pedido: $json.r, url: $json.r.mp_init_point } };"
+      },
+      "id": "58c5df1b-47d2-4899-bb54-4f42cf8ae2ec",
+      "name": "Armar Link de Pago",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2592,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuQzrUqxzOwLIFGl",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "777f72d8-664e-4a8b-83b6-0c2d9d56c6ff",
+      "name": "Enviar Link (Sender)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2848,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst redact = (s) => String(s ?? '')\n  .replace(/Bearer\\s+[A-Za-z0-9._\\-~+\\/=]+/gi, 'Bearer [REDACTED]')\n  .replace(/EAA[A-Za-z0-9]{20,}/g, '[REDACTED_META_TOKEN]')\n  .replace(/(APP_USR|TEST)-[A-Za-z0-9\\-_]{10,}/g, '[REDACTED_MP_TOKEN]')\n  .replace(/sk-[A-Za-z0-9_\\-]{16,}/g, '[REDACTED_OPENAI_KEY]')\n  .replace(/postgres(ql)?:\\/\\/[^\\s'\"]+/gi, 'postgres://[REDACTED]')\n  .replace(/(password|passwd|token|secret|api[_-]?key|authorization)([\"'\\s:=]+)([^\\s,\"'}]+)/gi, '$1$2[REDACTED]');\n\nconst ctx = $('Armar Preferencia').first().json;\nreturn { json: { telefono: ctx.pedido.telefono, tipo: 'error',\n  texto: 'No pude generar tu link de pago en este momento 🙏 Tu reserva sigue activa unos minutos: vuelve a pulsar *Confirmar* en el resumen o escríbeme de nuevo.',\n  detalle: redact($json.error?.message || $json.error || 'error de Mercado Pago').slice(0, 500) } };\n"
+      },
+      "id": "b80933e4-964e-4ee2-863e-9276550d4067",
+      "name": "Armar Error de Pago",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3104,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuQzrUqxzOwLIFGl",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "a3b57b24-385c-41cb-8ba2-39fdcf8387dc",
+      "name": "Enviar Error (Sender)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3360,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO error_log (workflow_nombre, nodo, mensaje) VALUES ('Create Mercado Pago Payment', 'Crear Preferencia MP', $1)",
+        "options": {
+          "queryReplacement": "={{ [ $json.detalle ] }}"
+        }
+      },
+      "id": "88c99b8c-8ec4-4e1e-81ad-f6016a833f2b",
+      "name": "Registrar Error MP",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3632,
+        272
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7n6B4nm3zv5jlds5",
+          "name": "Neon PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { telefono: $('Armar Preferencia').first().json.pedido.telefono, tipo: 'error', texto: 'Tu pedido ya no está disponible para pago. Escríbeme si quieres iniciar uno nuevo.' } };"
+      },
+      "id": "40b2f58d-351d-4d94-a19b-8412a03f744d",
+      "name": "Armar Error Registro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3888,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuQzrUqxzOwLIFGl",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "c4564941-d6e5-4ef3-9b46-c17912598e38",
+      "name": "Enviar Error Registro (Sender)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        4144,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "content": "**Crea la preferencia de pago (Checkout Pro)**\n\nEntrada: JSON del pedido (resultado de fn_confirmar_pedido).\n- Si ya tiene `mp_init_point` (doble toque) solo reenvía el link.\n- Si no, crea la preferencia con external_reference = pedido_id y notification_url = WEBHOOK_URL/webhook/mercadopago.\n- La preferencia expira al mismo tiempo que la reserva.\n- Valida que la suma de ítems == total del pedido.\n\nSi MP falla: la reserva se mantiene y el cliente puede pulsar Confirmar de nuevo; si no, expira sola.\n\nCredencial: `Mercado Pago Access Token` (Header Auth: Authorization = Bearer <token>).\n\nCredenciales: crear una Header Auth \"Mercado Pago Access Token\" (Authorization = Bearer <access token de MP>) y asignarla a \"Crear Preferencia MP\".",
+        "height": 300,
+        "width": 460
+      },
+      "id": "f9470fe5-fa17-4c3a-8da3-f217a9a765fc",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Entrada": {
+      "main": [
+        [
+          {
+            "node": "¿Ya tiene link?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Ya tiene link?": {
+      "main": [
+        [
+          {
+            "node": "Armar Link Existente",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Armar Preferencia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Link Existente": {
+      "main": [
+        [
+          {
+            "node": "Enviar Link (Sender)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Preferencia": {
+      "main": [
+        [
+          {
+            "node": "Crear Preferencia MP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear Preferencia MP": {
+      "main": [
+        [
+          {
+            "node": "Extraer Preferencia",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Armar Error de Pago",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer Preferencia": {
+      "main": [
+        [
+          {
+            "node": "fn_registrar_preferencia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fn_registrar_preferencia": {
+      "main": [
+        [
+          {
+            "node": "¿Registrada?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Registrada?": {
+      "main": [
+        [
+          {
+            "node": "Armar Link de Pago",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Armar Error Registro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Link de Pago": {
+      "main": [
+        [
+          {
+            "node": "Enviar Link (Sender)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Error Registro": {
+      "main": [
+        [
+          {
+            "node": "Enviar Error Registro (Sender)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Error de Pago": {
+      "main": [
+        [
+          {
+            "node": "Enviar Error (Sender)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Registrar Error MP",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "errorWorkflow": "aHI8dCEOVUV5qT91"
+  },
+  "versionId": "9409bce6-5e90-4d76-ba7b-419de35b4853",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2999b9d59aaed27f3e392ce31b61b88b0c7e6714815820c57e764db37b52f47b"
+  },
+  "nodeGroups": [],
+  "id": "0eb3saUm3Pubyzas",
+  "tags": []
+}

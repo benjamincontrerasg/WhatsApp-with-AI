@@ -1,0 +1,265 @@
+{
+  "name": "04 - Pedido: Cancelar",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "7a3fcd2d-78fd-4209-89ee-adbba44f17f8",
+      "name": "Entrada",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        272,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst d = $json;\nconst m = String(d.button_id || '').match(/^cancelar_pedido:([0-9a-fA-F-]{36})$/);\nconst tel = String(d.telefono || '').replace(/\\D/g, '');\nconst ok = !!m && /^\\d{8,15}$/.test(tel);\nreturn { json: { valido: ok, telefono: tel, pedido_id: ok ? m[1].toLowerCase() : null } };\n"
+      },
+      "id": "6da39aa0-254f-4440-82b7-1e842a34152d",
+      "name": "Extraer y Validar ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1f75bfa-8a8c-9e00-c813-98df699259de",
+              "leftValue": "={{ $json.valido }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "faf04b1a-c9e9-4a32-ad52-ed20b57c3e0f",
+      "name": "¿ID válido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1024,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT fn_cancelar_pedido($1::text, $2::text, 'CANCELADO_POR_CLIENTE') AS r",
+        "options": {
+          "queryReplacement": "={{ [ $json.pedido_id, $json.telefono ] }}"
+        }
+      },
+      "id": "cf663a1a-8265-4c82-92e3-f82c715da891",
+      "name": "fn_cancelar_pedido",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1280,
+        272
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7n6B4nm3zv5jlds5",
+          "name": "Neon PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst r = $json.r || {};\nconst tel = $('Extraer y Validar ID').first().json.telefono;\nconst n = r.numero ? ` #${r.numero}` : '';\nconst M = {\n  CANCELADO: `Listo, cancelé tu pedido${n}. Liberamos las unidades y no se te cobró nada. ¿Te ayudo con algo más?`,\n  YA_CANCELADO: `Tu pedido${n} ya estaba cancelado.`,\n  NO_CANCELABLE: `El pedido${n} ya no se puede cancelar desde aquí (estado: ${r.estado}). Una persona del equipo puede ayudarte.`,\n  PEDIDO_NO_ENCONTRADO: 'No encontré ese pedido asociado a tu número.',\n  ID_INVALIDO: 'No pude identificar el pedido.'\n};\nreturn { json: { telefono: tel, tipo: 'texto', texto: M[r.codigo] || 'No pudimos cancelar tu pedido. Inténtalo nuevamente.' } };\n"
+      },
+      "id": "79bfcc1c-ff13-44f0-8672-63681ac43394",
+      "name": "Armar Mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { telefono: String($json.telefono || ''), tipo: 'texto', texto: 'No pude identificar el pedido.' } };"
+      },
+      "id": "58a174c8-7dc6-4f91-a82a-745ad732f9ac",
+      "name": "Armar Mensaje ID Inválido",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuQzrUqxzOwLIFGl",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "6b7f1351-7143-401a-8b1f-db7390d7c7d2",
+      "name": "Enviar Mensaje (Sender)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2064,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuQzrUqxzOwLIFGl",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "c350f9ec-5327-4e1b-a4eb-196489663a96",
+      "name": "Enviar ID Inválido (Sender)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2320,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "content": "**Cancelar pedido (botón `cancelar_pedido:<uuid>`)**\n\nNo usa IA. `fn_cancelar_pedido` valida dueño, estado, libera reservas (idempotente) y deja el pedido en CANCELADO.",
+        "height": 300,
+        "width": 460
+      },
+      "id": "2e509064-eec7-417b-89cf-6c99f79fabab",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Entrada": {
+      "main": [
+        [
+          {
+            "node": "Extraer y Validar ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer y Validar ID": {
+      "main": [
+        [
+          {
+            "node": "¿ID válido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿ID válido?": {
+      "main": [
+        [
+          {
+            "node": "fn_cancelar_pedido",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Armar Mensaje ID Inválido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Mensaje ID Inválido": {
+      "main": [
+        [
+          {
+            "node": "Enviar ID Inválido (Sender)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fn_cancelar_pedido": {
+      "main": [
+        [
+          {
+            "node": "Armar Mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Mensaje": {
+      "main": [
+        [
+          {
+            "node": "Enviar Mensaje (Sender)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "errorWorkflow": "aHI8dCEOVUV5qT91"
+  },
+  "versionId": "cd8a246d-5d7d-4e16-9533-a530d00cb58b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2999b9d59aaed27f3e392ce31b61b88b0c7e6714815820c57e764db37b52f47b"
+  },
+  "nodeGroups": [],
+  "id": "ShQ31ZHRzxkYBthn",
+  "tags": []
+}

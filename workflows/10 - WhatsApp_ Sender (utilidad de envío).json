@@ -1,0 +1,304 @@
+{
+  "name": "10 - WhatsApp: Sender (utilidad de envío)",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "f065b938-e268-4188-b05d-ecc70c56135b",
+      "name": "Entrada",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst cut = (s, n) => String(s ?? '').slice(0, n);\nconst money = (n, cur) => { try { return new Intl.NumberFormat('es-CL', { style: 'currency', currency: String(cur || 'CLP').trim(), maximumFractionDigits: 0 }).format(Number(n)); } catch (e) { return `${n} ${cur || ''}`; } };\nconst hora = (iso) => { try { return new Date(iso).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Santiago' }); } catch (e) { return ''; } };\nconst ESTADOS = {\n  PENDIENTE_PAGO: 'Esperando tu pago ⏳', PAGADO: 'Pago recibido ✅', PREPARANDO: 'Estamos preparando tu pedido 📦',\n  LISTO_RETIRO: 'Tu pedido está listo para retirar 🛍️', ENVIADO: 'Tu pedido fue enviado 🚚', ENTREGADO: 'Tu pedido fue entregado 🎉',\n  RETIRADO: 'Pedido retirado ✅', CANCELADO: 'Pedido cancelado', PAGO_RECHAZADO: 'Pago rechazado ❌',\n  DEVOLUCION_SOLICITADA: 'Devolución solicitada', DEVUELTO: 'Pedido devuelto', REEMBOLSADO: 'Pago reembolsado 💸', BORRADOR: 'Pendiente de confirmación'\n};\nconst lineasItems = (items, cur) => (items || []).map((i, k) => {\n  const l = [`*Producto:* ${i.producto}`];\n  if (i.talla) l.push(`*Talla:* ${i.talla}`);\n  if (i.color) l.push(`*Color:* ${i.color}`);\n  l.push(`*Cantidad:* ${i.cantidad}`, `*Precio:* ${money(i.precio_unitario, cur)}`);\n  return l.join('\\n');\n}).join('\\n\\n');\n\nconst out = [];\nfor (const it of $input.all()) {\n  const d = it.json || {};\n  const to = String(d.telefono || '').replace(/\\D/g, '');\n  if (!/^\\d{8,15}$/.test(to)) { out.push({ json: { skip: true, error: 'TELEFONO_INVALIDO' } }); continue; }\n  const base = { messaging_product: 'whatsapp', recipient_type: 'individual', to };\n  const text = (t) => ({ ...base, type: 'text', text: { body: cut(t, 4000), preview_url: false } });\n  const buttons = (t, bs) => ({ ...base, type: 'interactive', interactive: { type: 'button', body: { text: cut(t, 1024) },\n      action: { buttons: bs.slice(0, 3).map(b => ({ type: 'reply', reply: { id: cut(b.id, 256), title: cut(b.titulo, 20) } })) } } });\n  const cta = (t, label, url) => ({ ...base, type: 'interactive', interactive: { type: 'cta_url', body: { text: cut(t, 1024) },\n      action: { name: 'cta_url', parameters: { display_text: cut(label, 20), url } } } });\n  const p = d.pedido || {};\n  const num = d.numero ?? p.numero;\n  let body;\n  switch (d.tipo) {\n    case 'texto': body = text(d.texto); break;\n    case 'botones': body = buttons(d.texto, d.botones || []); break;\n    case 'confirmacion_pedido': {\n      const t = `*Resumen de tu pedido #${p.numero}*\\n\\n${lineasItems(p.items, p.moneda)}\\n\\n*Total:* ${money(p.total, p.moneda)}\\n\\n¿Quieres confirmar tu pedido?`;\n      body = buttons(t, [{ id: `confirmar_pedido:${p.pedido_id}`, titulo: 'Confirmar' }, { id: `cancelar_pedido:${p.pedido_id}`, titulo: 'Cancelar' }]);\n      break;\n    }\n    case 'link_pago': {\n      const url = String(d.url || '');\n      if (!/^https:\\/\\//.test(url)) { out.push({ json: { skip: true, error: 'URL_PAGO_INVALIDA' } }); continue; }\n      const t = `Reservamos tu pedido #${p.numero} por *${money(p.total, p.moneda)}*.\\n\\nTienes hasta las *${hora(p.expira_en)}* para pagar con Mercado Pago. Pasado ese tiempo, la reserva se libera automáticamente.`;\n      body = cta(t, 'Pagar ahora', url);\n      break;\n    }\n    case 'pago_aprobado': body = text(`✅ ¡Pago recibido! Tu pedido #${num} por ${money(d.total, d.moneda)} está confirmado. Te avisaremos cuando esté listo.`); break;\n    case 'pago_rechazado': {\n      const extra = d.url ? `\\n\\nPuedes intentarlo de nuevo con otro medio de pago hasta las ${hora(d.expira_en)}:\\n${d.url}` : '';\n      body = text(`❌ Tu pago del pedido #${num} fue rechazado.${extra}`); break;\n    }\n    case 'reembolso_pendiente': body = text(`Recibimos tu pago del pedido #${num}, pero lamentablemente ya no tenemos stock disponible. Te lo reembolsaremos; una persona del equipo te contactará.`); break;\n    case 'estado_pedido': body = text(`Pedido #${num}: ${ESTADOS[d.estado] || d.estado}`); break;\n    case 'error': body = text(d.texto || 'Tuvimos un problema técnico procesando tu solicitud. Por favor inténtalo nuevamente en unos minutos.'); break;\n    default: out.push({ json: { skip: true, error: 'TIPO_DESCONOCIDO' } }); continue;\n  }\n  out.push({ json: { skip: false, body } });\n}\nreturn out;\n"
+      },
+      "id": "90388450-bfee-4998-b1e8-e8ff89799d62",
+      "name": "Construir Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        976,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "acccd5fd-7ed1-2d24-fbe3-753576589776",
+              "leftValue": "={{ !$json.skip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1618f5ea-9b45-470b-9946-63f2507eb621",
+      "name": "¿Payload válido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1232,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $env.WHATSAPP_GRAPH_VERSION || 'v23.0' }}/{{ $env.WHATSAPP_PHONE_NUMBER_ID || '1372871745910576' }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "d37a9d34-324f-4d15-93f6-886066a2a694",
+      "name": "Enviar a WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1488,
+        128
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1500,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "jxGv11we5t8T7IJp",
+          "name": "Meta WhatsApp Access Token"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst redact = (s) => String(s ?? '')\n  .replace(/Bearer\\s+[A-Za-z0-9._\\-~+\\/=]+/gi, 'Bearer [REDACTED]')\n  .replace(/EAA[A-Za-z0-9]{20,}/g, '[REDACTED_META_TOKEN]')\n  .replace(/(APP_USR|TEST)-[A-Za-z0-9\\-_]{10,}/g, '[REDACTED_MP_TOKEN]')\n  .replace(/sk-[A-Za-z0-9_\\-]{16,}/g, '[REDACTED_OPENAI_KEY]')\n  .replace(/postgres(ql)?:\\/\\/[^\\s'\"]+/gi, 'postgres://[REDACTED]')\n  .replace(/(password|passwd|token|secret|api[_-]?key|authorization)([\"'\\s:=]+)([^\\s,\"'}]+)/gi, '$1$2[REDACTED]');\n\nconst j = $input.first().json;\nconst err = j.error ? redact(typeof j.error === 'string' ? j.error : (j.error.message || JSON.stringify(j.error))) : null;\nreturn [{ json: { ok: !err && !j.skip, wa_message_id: j.messages?.[0]?.id || null, error: err || null, skip: !!j.skip } }];\n"
+      },
+      "id": "75d0e650-64e0-4de2-a192-6307a33a3c80",
+      "name": "Resultado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bcadab35-bcaf-6cb4-7db6-bbc416e2f482",
+              "leftValue": "={{ !$json.ok && !$json.skip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c265cd83-7196-4439-8969-3f13a767ee09",
+      "name": "¿Falló el envío?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2016,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $('Resultado').first().json }];"
+      },
+      "id": "80016f60-245a-4a72-bb38-33c2016fbc53",
+      "name": "Resultado Final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2656,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO error_log (workflow_id, workflow_nombre, nodo, mensaje) VALUES ($1, $2, $3, $4)",
+        "options": {
+          "queryReplacement": "={{ ['wfWaSender000001', 'WhatsApp Sender', 'Enviar a WhatsApp', String($json.error || '').slice(0, 500)] }}"
+        }
+      },
+      "id": "46120402-6250-44b7-a548-c8c682108ef0",
+      "name": "Registrar error de envío",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2544,
+        112
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7n6B4nm3zv5jlds5",
+          "name": "Neon PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "**Sub-workflow reutilizable**\n\nEnvía mensajes por Meta WhatsApp Cloud API.\n\nEntrada: `telefono` (solo dígitos) y `tipo`:\n- texto {texto}\n- botones {texto, botones[{id,titulo}]}\n- confirmacion_pedido {pedido}\n- link_pago {pedido, url}\n- pago_aprobado | pago_rechazado | estado_pedido | reembolso_pendiente | error\n\nCredencial: `Meta WhatsApp Access Token` (Header Auth: Authorization = Bearer <token>).\nVariables de entorno: WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_GRAPH_VERSION.",
+        "height": 300,
+        "width": 460
+      },
+      "id": "72bfda8f-d283-4700-bb7d-5c62c9582408",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        272,
+        -464
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Entrada": {
+      "main": [
+        [
+          {
+            "node": "Construir Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir Payload": {
+      "main": [
+        [
+          {
+            "node": "¿Payload válido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Payload válido?": {
+      "main": [
+        [
+          {
+            "node": "Enviar a WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar a WhatsApp": {
+      "main": [
+        [
+          {
+            "node": "Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resultado": {
+      "main": [
+        [
+          {
+            "node": "¿Falló el envío?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Falló el envío?": {
+      "main": [
+        [
+          {
+            "node": "Registrar error de envío",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Resultado Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Registrar error de envío": {
+      "main": [
+        [
+          {
+            "node": "Resultado Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "errorWorkflow": "aHI8dCEOVUV5qT91"
+  },
+  "versionId": "512673c0-dec8-45ce-8899-8c18260acbb0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2999b9d59aaed27f3e392ce31b61b88b0c7e6714815820c57e764db37b52f47b"
+  },
+  "nodeGroups": [],
+  "id": "AuQzrUqxzOwLIFGl",
+  "tags": []
+}

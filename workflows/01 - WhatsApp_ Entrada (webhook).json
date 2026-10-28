@@ -1,0 +1,855 @@
+{
+  "name": "01 - WhatsApp: Entrada (webhook)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "9f5e824c-a864-4b42-806a-8763be1ba5d1",
+      "name": "Webhook WhatsApp POST",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1008,
+        608
+      ],
+      "webhookId": "900dfdc6-554c-dd26-457b-33c7d604de0e"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst crypto = require('crypto');\nconst item = $input.first();\nconst secret = String($env.META_APP_SECRET || '');\nlet valid = false, reason = '';\nif (!secret) { reason = 'META_APP_SECRET no configurado'; }\nelse {\n  const header = String(item.json.headers?.['x-hub-signature-256'] || '');\n  const raw = await this.helpers.getBinaryDataBuffer(0, 'data');\n  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(raw).digest('hex');\n  const a = Buffer.from(header), b = Buffer.from(expected);\n  valid = a.length === b.length && crypto.timingSafeEqual(a, b);\n  if (!valid) reason = 'firma invalida';\n}\nreturn [{ json: { valid, reason, http_status: valid ? 200 : 401, body: item.json.body || {} } }];\n"
+      },
+      "id": "ff614dc4-2a61-4fc1-81ba-905b6a335853",
+      "name": "Validar Firma",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.valid ? 'EVENT_RECEIVED' : 'Unauthorized' }}",
+        "options": {
+          "responseCode": "={{ $json.http_status }}"
+        }
+      },
+      "id": "7194a3a2-6dd3-4301-b6e2-996c444f5658",
+      "name": "Responder a Meta",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -240,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "050987ce-d4fb-a84c-fcbe-4557a0b3c500",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "15f4b585-2a71-4b70-b8db-35d1138e0a84",
+      "name": "¿Firma válida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        32,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst body = $input.first().json.body || {};\nconst out = [];\nconst UUID = '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})';\nconst reC = new RegExp('^confirmar_pedido:' + UUID + '$');\nconst reX = new RegExp('^cancelar_pedido:' + UUID + '$');\nfor (const entry of (body.entry || [])) {\n  for (const ch of (entry.changes || [])) {\n    const v = ch.value || {};\n    if (ch.field && ch.field !== 'messages') continue;\n    const contacts = v.contacts || [];\n    for (const m of (v.messages || [])) {\n      const tel = String(m.from || '').replace(/\\D/g, '');\n      const nombre = (contacts.find(c => String(c.wa_id) === String(m.from)) || contacts[0] || {}).profile?.name || null;\n      let ruta = 'ignorar', texto = null, button_id = null, pedido_id = null;\n      if (/^\\d{8,15}$/.test(tel)) {\n        if (m.type === 'text') {\n          texto = String(m.text?.body || '').trim().slice(0, 1000);\n          ruta = texto ? 'agente' : 'ignorar';\n        } else if (m.type === 'interactive') {\n          const br = m.interactive?.button_reply, lr = m.interactive?.list_reply;\n          button_id = String(br?.id || lr?.id || '');\n          texto = String(br?.title || lr?.title || '').slice(0, 200);\n          const mc = button_id.match(reC), mx = button_id.match(reX);\n          if (mc) { ruta = 'confirmar'; pedido_id = mc[1].toLowerCase(); }\n          else if (mx) { ruta = 'cancelar'; pedido_id = mx[1].toLowerCase(); }\n          else ruta = texto ? 'agente' : 'ignorar';\n        } else if (m.type === 'button') {            // respuesta rápida de plantilla\n          texto = String(m.button?.text || '').slice(0, 200);\n          ruta = texto ? 'agente' : 'ignorar';\n        } else if (['image', 'audio', 'video', 'document', 'sticker', 'location', 'contacts', 'voice'].includes(m.type)) {\n          ruta = 'no_soportado';\n        }\n      }\n      out.push({ json: { evento: 'mensaje', dedupe_key: m.id, wamid: m.id, telefono: tel, nombre, tipo_mensaje: m.type,\n                         ruta, texto, button_id, pedido_id, phone_number_id: v.metadata?.phone_number_id || null } });\n    }\n    for (const s of (v.statuses || [])) {\n      out.push({ json: { evento: 'status', dedupe_key: `${s.id}:${s.status}`, wamid: s.id, status: s.status,\n                         telefono: String(s.recipient_id || '').replace(/\\D/g, ''),\n                         errores: (s.errors || []).map(e => ({ code: e.code, title: e.title, message: e.message })),\n                         ruta: s.status === 'failed' ? 'status_fallido' : 'ignorar', tipo_mensaje: 'status' } });\n    }\n  }\n}\nreturn out;\n"
+      },
+      "id": "522cc664-a0b1-4113-bae6-168d7728e8bc",
+      "name": "Normalizar Mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT fn_registrar_webhook('whatsapp', $1, $2::jsonb) AS nuevo, $3::jsonb AS ev",
+        "options": {
+          "queryReplacement": "={{ [ $json.dedupe_key, JSON.stringify({ evento: $json.evento, ruta: $json.ruta, tipo: $json.tipo_mensaje }), JSON.stringify($json) ] }}"
+        }
+      },
+      "id": "d04d63fb-b968-445d-ab14-59c7fe8c34ab",
+      "name": "Deduplicar Evento",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        544,
+        608
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7n6B4nm3zv5jlds5",
+          "name": "Neon PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e6a0fb31-b654-7c3f-f179-415abb2c4729",
+              "leftValue": "={{ $json.nuevo }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c82b6ef4-fb24-4d32-a8dc-923edfaf8595",
+      "name": "¿Evento nuevo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        800,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: $json.ev };"
+      },
+      "id": "f8da9716-44bd-44c1-8ef7-c3a54bbc9b5a",
+      "name": "Restaurar Evento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "f34e1b9d-a97a-c30d-5be2-4013b31116ec",
+                    "leftValue": "={{ $json.ruta }}",
+                    "rightValue": "confirmar",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "confirmar"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "1e908219-26c6-f75b-a779-87bca75c9a99",
+                    "leftValue": "={{ $json.ruta }}",
+                    "rightValue": "cancelar",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "cancelar"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "8e306732-d01b-53ae-f79e-56da82288584",
+                    "leftValue": "={{ $json.ruta }}",
+                    "rightValue": "agente",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "agente"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "78b4b6f2-b35c-adf6-f2ba-006a4b375053",
+                    "leftValue": "={{ $json.ruta }}",
+                    "rightValue": "no_soportado",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "no_soportado"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "de8b5757-6c69-a5c8-a827-7e51d0794005",
+                    "leftValue": "={{ $json.ruta }}",
+                    "rightValue": "status_fallido",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status_fallido"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "ignorar"
+        }
+      },
+      "id": "16cb29cd-8605-4ec5-b986-96025b10e318",
+      "name": "Ruteo",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1328,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "4D5lOE9VsWQ9yjXX",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "ac9aa9b0-f772-4589-8f5a-71711b86353b",
+      "name": "Confirm Order",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1648,
+        448
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "ShQ31ZHRzxkYBthn",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "33c83fc3-d3ef-4df2-a375-da6ee6a73794",
+      "name": "Cancel Order",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1632,
+        608
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "0N8fAwgw5Om8cI3V",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "b8ee6608-43f4-4180-954c-b071da5c1a3b",
+      "name": "AI Customer Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1632,
+        800
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { telefono: $json.telefono, tipo: 'texto', texto: 'Por ahora solo puedo leer mensajes de texto 🙂 ¿Me cuentas qué estás buscando?' } };"
+      },
+      "id": "29ab5e87-adb0-417d-b7e5-cc928c216caa",
+      "name": "Armar Aviso No Soportado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        1008
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuQzrUqxzOwLIFGl",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "49b13f1e-8890-4cd7-a7ba-14246bacc2ea",
+      "name": "Enviar Aviso (Sender)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1888,
+        1008
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO error_log (workflow_nombre, nodo, mensaje, detalle) VALUES ('WhatsApp Incoming Messages','status fallido',$1,$2::jsonb)",
+        "options": {
+          "queryReplacement": "={{ [ JSON.stringify($json.errores).slice(0, 500), JSON.stringify({ wamid: $json.wamid, destino: String($json.telefono).slice(-4) }) ] }}"
+        }
+      },
+      "id": "81ca75b9-6532-435d-a774-751e3850771d",
+      "name": "Registrar Status Fallido",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1632,
+        1200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7n6B4nm3zv5jlds5",
+          "name": "Neon PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst redact = (s) => String(s ?? '')\n  .replace(/Bearer\\s+[A-Za-z0-9._\\-~+\\/=]+/gi, 'Bearer [REDACTED]')\n  .replace(/EAA[A-Za-z0-9]{20,}/g, '[REDACTED_META_TOKEN]')\n  .replace(/(APP_USR|TEST)-[A-Za-z0-9\\-_]{10,}/g, '[REDACTED_MP_TOKEN]')\n  .replace(/sk-[A-Za-z0-9_\\-]{16,}/g, '[REDACTED_OPENAI_KEY]')\n  .replace(/postgres(ql)?:\\/\\/[^\\s'\"]+/gi, 'postgres://[REDACTED]')\n  .replace(/(password|passwd|token|secret|api[_-]?key|authorization)([\"'\\s:=]+)([^\\s,\"'}]+)/gi, '$1$2[REDACTED]');\n\nlet ev; try { ev = $('Restaurar Evento').item.json; } catch (e) { ev = $('Restaurar Evento').first().json; }\nreturn { json: { telefono: ev.telefono, tipo: 'error', ruta: ev.ruta,\n                 mensaje_error: redact($json.error?.message || $json.error || 'error en sub-workflow').slice(0, 500) } };\n"
+      },
+      "id": "8ab283ab-6738-4f4c-b4c6-12068d9ec1a8",
+      "name": "Armar Error Genérico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2944,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuQzrUqxzOwLIFGl",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "8a9ae22c-75db-4db3-bc4e-3aa4330f602e",
+      "name": "Enviar Error al Cliente (Sender)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3408,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO error_log (workflow_nombre, nodo, mensaje) VALUES ('WhatsApp Incoming Messages', $1, $2)",
+        "options": {
+          "queryReplacement": "={{ [ $json.ruta, $json.mensaje_error ] }}"
+        }
+      },
+      "id": "a5fd2d58-f47e-4ded-a8a2-7a861d8ce985",
+      "name": "Registrar Error de Sub-workflow",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        3408,
+        672
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7n6B4nm3zv5jlds5",
+          "name": "Neon PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "path": "whatsapp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "60814619-75d0-4043-afb6-f8d8b96f3ae4",
+      "name": "Webhook GET",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1008,
+        80
+      ],
+      "webhookId": "376bd6b9-e61d-3105-0efb-e7729a441140"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst q = $json.query || {};\nconst esperado = String($env.WHATSAPP_VERIFY_TOKEN || '');\nconst ok = !!esperado && q['hub.mode'] === 'subscribe' && String(q['hub.verify_token'] || '') === esperado\n           && /^[A-Za-z0-9_\\-]{1,200}$/.test(String(q['hub.challenge'] || ''));\nreturn { json: { ok, challenge: ok ? String(q['hub.challenge']) : '' } };\n"
+      },
+      "id": "f69f3956-80df-4269-a6eb-6dcd0a562723",
+      "name": "Validar Token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -496,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9d9c9a18-f180-583e-d517-367ddbf19e65",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8cc27e47-c462-46ca-953b-d17ac0bf6043",
+      "name": "¿Token válido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -240,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.challenge }}",
+        "options": {
+          "responseCode": "200"
+        }
+      },
+      "id": "082db973-cd2b-480a-aa4f-cf7e281a5923",
+      "name": "Responder challenge",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "Forbidden",
+        "options": {
+          "responseCode": "403"
+        }
+      },
+      "id": "8c319a13-c319-4444-a3c7-25bfeb942f75",
+      "name": "Responder 403",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "content": "**01 · WhatsApp Entrada**\n\nGET /webhook/whatsapp → verificación de Meta (arriba).\nPOST /webhook/whatsapp → firma, 200 inmediato, normaliza, dedupe y enruta:\n- confirmar_pedido:<uuid> → 03\n- cancelar_pedido:<uuid> → 04\n- texto → 02 Agente IA\n\nRequiere NODE_FUNCTION_ALLOW_BUILTIN=crypto y N8N_BLOCK_ENV_ACCESS_IN_NODE=false.",
+        "height": 300,
+        "width": 460
+      },
+      "id": "ed03ffab-14ad-4f41-9920-fbb607e3a4a3",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1520,
+        256
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook WhatsApp POST": {
+      "main": [
+        [
+          {
+            "node": "Validar Firma",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Firma": {
+      "main": [
+        [
+          {
+            "node": "Responder a Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Responder a Meta": {
+      "main": [
+        [
+          {
+            "node": "¿Firma válida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Firma válida?": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar Mensaje": {
+      "main": [
+        [
+          {
+            "node": "Deduplicar Evento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicar Evento": {
+      "main": [
+        [
+          {
+            "node": "¿Evento nuevo?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Evento nuevo?": {
+      "main": [
+        [
+          {
+            "node": "Restaurar Evento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restaurar Evento": {
+      "main": [
+        [
+          {
+            "node": "Ruteo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ruteo": {
+      "main": [
+        [
+          {
+            "node": "Confirm Order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cancel Order",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Customer Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Armar Aviso No Soportado",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Registrar Status Fallido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Aviso No Soportado": {
+      "main": [
+        [
+          {
+            "node": "Enviar Aviso (Sender)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Order": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Armar Error Genérico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancel Order": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Armar Error Genérico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Customer Agent": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Armar Error Genérico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Error Genérico": {
+      "main": [
+        [
+          {
+            "node": "Enviar Error al Cliente (Sender)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Registrar Error de Sub-workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook GET": {
+      "main": [
+        [
+          {
+            "node": "Validar Token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Token": {
+      "main": [
+        [
+          {
+            "node": "¿Token válido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Token válido?": {
+      "main": [
+        [
+          {
+            "node": "Responder challenge",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Responder 403",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "errorWorkflow": "aHI8dCEOVUV5qT91"
+  },
+  "versionId": "5e63ea5e-9944-49b8-8186-d6705fb12803",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2999b9d59aaed27f3e392ce31b61b88b0c7e6714815820c57e764db37b52f47b"
+  },
+  "nodeGroups": [],
+  "id": "wxzB3IesvfsPcM64",
+  "tags": []
+}

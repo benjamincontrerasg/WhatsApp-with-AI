@@ -1,0 +1,356 @@
+{
+  "name": "03 - Pedido: Confirmar",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "590b1904-e3f0-4d9c-b1c7-ce585e9a40ab",
+      "name": "Entrada",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        272,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst d = $json;\nconst m = String(d.button_id || '').match(/^confirmar_pedido:([0-9a-fA-F-]{36})$/);\nconst tel = String(d.telefono || '').replace(/\\D/g, '');\nconst ok = !!m && /^\\d{8,15}$/.test(tel);\nreturn { json: { valido: ok, telefono: tel, pedido_id: ok ? m[1].toLowerCase() : null } };\n"
+      },
+      "id": "53f6c118-d9a0-40da-985b-2284ff261f7f",
+      "name": "Extraer y Validar ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a1f75bfa-8a8c-9e00-c813-98df699259de",
+              "leftValue": "={{ $json.valido }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "46cb9001-0a9e-48cf-bcec-3160004aa724",
+      "name": "¿ID válido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1024,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT fn_confirmar_pedido($1::text, $2::text) AS r",
+        "options": {
+          "queryReplacement": "={{ [ $json.pedido_id, $json.telefono ] }}"
+        }
+      },
+      "id": "6a63e77f-10e7-4730-abed-d750ef5457e8",
+      "name": "fn_confirmar_pedido",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1280,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "26895040-bda8-061c-e524-c26861ac2029",
+              "leftValue": "={{ $json.r.ok === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "31572b27-e61d-4c9c-a513-34916281621e",
+      "name": "¿Reserva OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1552,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: $json.r };"
+      },
+      "id": "a7e0e9e1-3f3d-46df-bec5-1eaf9047785f",
+      "name": "Preparar Datos de Pago",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "0eb3saUm3Pubyzas",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "2bc22090-7bd4-401c-a962-c886aa3f0f7e",
+      "name": "Create Mercado Pago Payment",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2064,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nconst r = $json.r || {};\nconst tel = $('Extraer y Validar ID').first().json.telefono;\nconst n = r.numero ? ` #${r.numero}` : '';\nconst M = {\n  SIN_STOCK: `Lo sentimos, ya no queda stock suficiente para tu pedido${n}. No se te cobró nada. ¿Te ayudo a elegir otra opción?`,\n  EXPIRADO: `Tu pedido${n} expiró antes de confirmarse. Si aún lo quieres, dímelo y lo preparo de nuevo.`,\n  CANCELADO: `El pedido${n} ya fue cancelado. Si quieres comprar, dime qué producto buscas.`,\n  YA_PAGADO: `El pedido${n} ya está pagado ✅`,\n  PEDIDO_NO_ENCONTRADO: 'No encontré ese pedido asociado a tu número. Si quieres comprar, dime qué producto buscas.',\n  ID_INVALIDO: 'No pude identificar el pedido. Si quieres comprar, dime qué producto buscas.',\n  ESTADO_INVALIDO: `El pedido${n} ya no se puede confirmar.`\n};\nreturn { json: { telefono: tel, tipo: 'texto', texto: M[r.codigo] || 'No pudimos confirmar tu pedido. Inténtalo nuevamente.' } };\n"
+      },
+      "id": "5270a072-d8e0-4277-ad03-b56d39cb4d6d",
+      "name": "Armar Mensaje de Rechazo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2320,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\nreturn { json: { telefono: String($json.telefono || ''), tipo: 'texto', texto: 'No pude identificar el pedido. Si quieres comprar, dime qué producto buscas.' } };\n"
+      },
+      "id": "8c94c531-859c-48ab-beba-95b8a6b2f5a2",
+      "name": "Armar Mensaje ID Inválido",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2592,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuQzrUqxzOwLIFGl",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "b31a0e40-c0e7-481c-9a41-ae76862511be",
+      "name": "Enviar Rechazo (Sender)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2848,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuQzrUqxzOwLIFGl",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "24d525b5-6941-488e-b0cf-c6b4d7bc9efd",
+      "name": "Enviar ID Inválido (Sender)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3104,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "content": "**Confirmar pedido (botón `confirmar_pedido:<uuid>`)**\n\nNo usa IA. Llama a `fn_confirmar_pedido(pedido_id, telefono)` que, en UNA transacción:\n- valida dueño (teléfono), estado y expiración\n- re-verifica disponibilidad y reserva stock de forma atómica\n- deja el pedido en PENDIENTE_PAGO con expira_en = ahora + reserva_minutos\n\nLuego invoca 'Create Mercado Pago Payment'.",
+        "height": 300,
+        "width": 460
+      },
+      "id": "0c84ecbc-8f0e-427b-b6c3-973cc6f6d53a",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Entrada": {
+      "main": [
+        [
+          {
+            "node": "Extraer y Validar ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraer y Validar ID": {
+      "main": [
+        [
+          {
+            "node": "¿ID válido?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿ID válido?": {
+      "main": [
+        [
+          {
+            "node": "fn_confirmar_pedido",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Armar Mensaje ID Inválido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Mensaje ID Inválido": {
+      "main": [
+        [
+          {
+            "node": "Enviar ID Inválido (Sender)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fn_confirmar_pedido": {
+      "main": [
+        [
+          {
+            "node": "¿Reserva OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Reserva OK?": {
+      "main": [
+        [
+          {
+            "node": "Preparar Datos de Pago",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Armar Mensaje de Rechazo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Datos de Pago": {
+      "main": [
+        [
+          {
+            "node": "Create Mercado Pago Payment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Armar Mensaje de Rechazo": {
+      "main": [
+        [
+          {
+            "node": "Enviar Rechazo (Sender)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "errorWorkflow": "aHI8dCEOVUV5qT91"
+  },
+  "versionId": "111528e4-a23b-4a5c-8db0-f6e9581b1bfe",
+  "meta": {
+    "instanceId": "2999b9d59aaed27f3e392ce31b61b88b0c7e6714815820c57e764db37b52f47b"
+  },
+  "nodeGroups": [],
+  "id": "4D5lOE9VsWQ9yjXX",
+  "tags": []
+}

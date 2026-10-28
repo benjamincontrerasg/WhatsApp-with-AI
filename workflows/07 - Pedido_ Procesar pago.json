@@ -1,0 +1,142 @@
+{
+  "name": "07 - Pedido: Procesar pago",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "768d29bb-f37a-49a9-8129-b59044fbcdda",
+      "name": "Entrada",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        272,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT fn_procesar_pago($1, $2, $3, $4, $5::numeric, $6, $7, $8::jsonb) AS r",
+        "options": {
+          "queryReplacement": "={{ [ $json.payment_id, $json.status, $json.status_detail, $json.external_reference, $json.monto, $json.moneda, $json.metodo, JSON.stringify($json.raw) ] }}"
+        }
+      },
+      "id": "41beb083-24a6-44a2-ab65-6385e8a65b19",
+      "name": "fn_procesar_pago",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        528,
+        96
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "7n6B4nm3zv5jlds5",
+          "name": "Neon PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst r = $input.first().json.r || {};\nconst out = [];\nconst MAP = { PAGADO: 'pago_aprobado', RECHAZADO: 'pago_rechazado', REEMBOLSADO: 'estado_pedido', REEMBOLSO_PENDIENTE: 'reembolso_pendiente' };\nif (r.notificar && r.telefono && MAP[r.mensaje]) {\n  out.push({ json: { telefono: r.telefono, tipo: MAP[r.mensaje], numero: r.numero, total: r.total, moneda: r.moneda,\n                     estado: 'REEMBOLSADO', expira_en: r.expira_en, url: r.mp_init_point, pedido: { numero: r.numero } } });\n}\nconst admin = String($env.ADMIN_WHATSAPP_NUMBER || '').replace(/\\D/g, '');\nif (r.alerta_admin && /^\\d{8,15}$/.test(admin)) {\n  out.push({ json: { telefono: admin, tipo: 'texto',\n    texto: `⚠️ Pago a revisar\\nCódigo: ${r.codigo}\\nPedido: #${r.numero ?? '-'}\\nMP payment_id: ${r.payment_id ?? '-'}\\nMonto pedido: ${r.total ?? '-'} ${r.moneda ?? ''}` } });\n}\nif (!out.length) return [];\nreturn out;\n"
+      },
+      "id": "c6d5cc75-1007-4b08-9e83-b5138ec16622",
+      "name": "Plan de Notificaciones",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AuQzrUqxzOwLIFGl",
+          "mode": "id"
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "7e3f897d-3059-4aa7-b310-ad405d47834d",
+      "name": "Enviar Notificaciones (Sender)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1040,
+        96
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "content": "**07 · Procesar pago**\n\nRecibe los datos del pago YA verificados contra la API de Mercado Pago.\n`fn_procesar_pago` (PostgreSQL) es idempotente por payment_id: valida monto/moneda/pedido, consume la reserva, pasa a PAGADO y dice si hay que notificar.\n\nSolo avisa al cliente cuando hubo un cambio real (los duplicados no re-envían mensajes).",
+        "height": 300,
+        "width": 460
+      },
+      "id": "55b90c9f-2e21-4353-a93a-a3577b715418",
+      "name": "Nota",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -272
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Entrada": {
+      "main": [
+        [
+          {
+            "node": "fn_procesar_pago",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fn_procesar_pago": {
+      "main": [
+        [
+          {
+            "node": "Plan de Notificaciones",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan de Notificaciones": {
+      "main": [
+        [
+          {
+            "node": "Enviar Notificaciones (Sender)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "errorWorkflow": "aHI8dCEOVUV5qT91"
+  },
+  "versionId": "7716a05e-7e80-4e34-8495-7f21d5859c85",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2999b9d59aaed27f3e392ce31b61b88b0c7e6714815820c57e764db37b52f47b"
+  },
+  "nodeGroups": [],
+  "id": "msZRRj8XpQRefcu1",
+  "tags": []
+}

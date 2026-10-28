@@ -1,0 +1,23 @@
+flowchart TD
+  C([Cliente en WhatsApp]) -->|mensaje / botón| M[Meta WhatsApp Cloud API]
+  M -->|POST /webhook/whatsapp| W1["01 · Entrada<br/>firma HMAC · 200 inmediato · dedupe"]
+  W1 -->|texto| W2["02 · Agente IA<br/>Claude + herramientas SQL"]
+  W1 -->|confirmar_pedido:id| W3["03 · Confirmar pedido<br/>reserva stock"]
+  W1 -->|cancelar_pedido:id| W4["04 · Cancelar pedido"]
+  W1 -->|imagen / audio / otros| NS[Aviso: no soportado]
+  W2 -->|consulta catálogo / stock| DB[(Neon PostgreSQL<br/>funciones fn_*)]
+  W2 -->|resumen con botones| W10
+  W3 --> DB
+  W4 --> DB
+  W3 --> W5["05 · Mercado Pago<br/>crear preferencia"]
+  W5 -->|link de pago| W10["10 · Sender<br/>envío WhatsApp"]
+  W5 --> MP[Mercado Pago]
+  MP -->|POST /webhook/mercadopago| W6["06 · Webhook MP<br/>firma · reconsulta el pago"]
+  W6 --> W7["07 · Procesar pago<br/>idempotente"]
+  W7 --> DB
+  W7 --> W10
+  W8["08 · Expiraciones<br/>cada minuto"] --> DB
+  W8 --> W10
+  W10 -->|mensaje| M
+  M --> C
+  ERR["09 · Error Workflow<br/>error_log + alerta al admin"] -.->|cualquier falla| W10
